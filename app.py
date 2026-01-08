@@ -1,167 +1,177 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime, date
+from io import BytesIO
 import os
-from datetime import datetime
 import plotly.express as px
 
 # ---------------- CONFIG ----------------
-PASSWORD = "Task@2026"
-USERS_FILE = "users.xlsx"
+st.set_page_config(page_title="Task Manager", layout="wide")
+
 TASK_FILE = "tasks.xlsx"
+ADMIN_EMAIL = "admin@task.com"
 
-st.set_page_config("Task Control Tower", layout="wide")
+STATUS_LIST = [
+    "In Progress",
+    "Completed",
+    "Partially Completed",
+    "Need Assistance"
+]
 
-# ---------------- LOAD USERS ----------------
-users = pd.read_excel(USERS_FILE)
-users.columns = users.columns.str.lower().str.strip()
+# ---------------- INIT TASK FILE ----------------
+if not os.path.exists(TASK_FILE):
+    df_init = pd.DataFrame(columns=[
+        "Task_Given_Date",
+        "Task_Name",
+        "Sort_Centre",
+        "Task_Remarks",
+        "Priority",
+        "Due_Date",
+        "Assigned_To",
+        "Status",
+        "Completion_Remarks",
+        "Created_By"
+    ])
+    df_init.to_excel(TASK_FILE, index=False)
 
 # ---------------- SESSION ----------------
-if "login" not in st.session_state:
-    st.session_state.login = False
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
 # ---------------- LOGIN ----------------
-if not st.session_state.login:
-    st.title("🔐 Task Control Tower")
-
+if not st.session_state.logged_in:
+    st.title("🔐 Task Manager Login")
     email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
-
     if st.button("Login"):
-        if email in users["email"].values and password == PASSWORD:
-            st.session_state.login = True
-            st.session_state.email = email
-            st.session_state.role = users.loc[
-                users["email"] == email, "role"
-            ].values[0]
+        if "@task.com" in email:
+            st.session_state.logged_in = True
+            st.session_state.user = email
+            st.session_state.role = "admin" if email == ADMIN_EMAIL else "user"
             st.rerun()
         else:
-            st.error("Invalid login")
+            st.error("Use company email (@task.com)")
 
 # ---------------- MAIN APP ----------------
 else:
-    st.success(f"Logged in as {st.session_state.email} ({st.session_state.role})")
-
-    # -------- INIT TASK FILE --------
-    if not os.path.exists(TASK_FILE):
-        pd.DataFrame(columns=[
-            "Task_ID","Task_Given_Date","Task_Name","Sort_Centre",
-            "Task_Remarks","Priority","Due_Date","Assigned_To",
-            "Status","Completion_Remarks","Last_Updated","Reminder"
-        ]).to_excel(TASK_FILE, index=False)
+    st.success(f"Logged in as {st.session_state.user} ({st.session_state.role})")
 
     df = pd.read_excel(TASK_FILE)
+    df["Due_Date"] = pd.to_datetime(df["Due_Date"], errors="coerce").dt.date
+    df["Task_Given_Date"] = pd.to_datetime(df["Task_Given_Date"], errors="coerce").dt.date
 
-    # -------- DATE NORMALIZATION --------
-    df["Task_Given_Date"] = pd.to_datetime(df["Task_Given_Date"], errors="coerce")
-    df["Due_Date"] = pd.to_datetime(df["Due_Date"], errors="coerce")
-    df["Last_Updated"] = pd.to_datetime(df["Last_Updated"], errors="coerce")
+    # ---------------- CREATE TASK ----------------
+    with st.expander("➕ Create New Task"):
+        c1, c2, c3 = st.columns(3)
+        task_name = c1.text_input("Task Name")
+        sort_centre = c2.text_input("Sort Centre")
+        priority = c3.selectbox("Priority", ["Low", "Medium", "High"])
 
-    # -------- AGING DAYS (FIXED) --------
-    today = pd.to_datetime(datetime.now().date())
-    df["Aging_Days"] = (today - df["Due_Date"]).dt.days
+        remarks = st.text_area("Task Remarks")
+        due_date = st.date_input("Due Date", min_value=date.today())
+        assigned_to = st.text_input("Assign To (email or everyone@task.com)")
 
-    # ---------------- CREATE TASK (ADMIN + USER) ----------------
-    st.header("➕ Create Task")
-
-    c1, c2, c3 = st.columns(3)
-    task = c1.text_input("Task Name")
-    centre = c2.text_input("Sort Centre")
-    assign_to = c3.selectbox("Assign To", users["email"].unique())
-
-    c4, c5, c6 = st.columns(3)
-    remarks = c4.text_input("Why task given")
-    priority = c5.selectbox("Priority", ["Low","Medium","High"])
-    due = c6.date_input("Due Date")
-
-    if st.button("Create Task"):
-        new = {
-            "Task_ID": len(df) + 1,
-            "Task_Given_Date": datetime.now(),
-            "Task_Name": task,
-            "Sort_Centre": centre,
-            "Task_Remarks": remarks,
-            "Priority": priority,
-            "Due_Date": due,
-            "Assigned_To": assign_to,
-            "Status": "In Progress",
-            "Completion_Remarks": "",
-            "Last_Updated": datetime.now(),
-            "Reminder": "No"
-        }
-        df = pd.concat([df, pd.DataFrame([new])], ignore_index=True)
-        df.to_excel(TASK_FILE, index=False)
-        st.success("Task created")
-        st.rerun()
-
-    # ---------------- FILTER VIEW ----------------
-    if st.session_state.role == "user":
-        df_view = df[df["Assigned_To"].isin([st.session_state.email, "everyone@task.com"])]
-    else:
-        df_view = df.copy()
-
-    # ---------------- DASHBOARD METRICS ----------------
-    st.header("📊 Overview")
-
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Total", len(df_view))
-    m2.metric("In Progress", len(df_view[df_view["Status"]=="In Progress"]))
-    m3.metric("Completed", len(df_view[df_view["Status"]=="Task Completed"]))
-    m4.metric("Partial", len(df_view[df_view["Status"]=="Partially Completed"]))
-    m5.metric("Need Help", len(df_view[df_view["Status"]=="Need Assistance"]))
-
-    # ---------------- ADMIN TABLE ----------------
-    if st.session_state.role == "admin":
-        st.header("🧾 Admin Control Table")
-
-        admin_df = st.data_editor(
-            df_view,
-            use_container_width=True,
-            disabled=["Task_ID","Task_Given_Date"],
-            num_rows="dynamic"
-        )
-
-        if st.button("💾 Save Admin Updates"):
-            admin_df.to_excel(TASK_FILE, index=False)
-            st.success("Admin changes saved")
+        if st.button("Create Task"):
+            new_task = {
+                "Task_Given_Date": date.today(),
+                "Task_Name": task_name,
+                "Sort_Centre": sort_centre,
+                "Task_Remarks": remarks,
+                "Priority": priority,
+                "Due_Date": due_date,
+                "Assigned_To": assigned_to,
+                "Status": "In Progress",
+                "Completion_Remarks": "",
+                "Created_By": st.session_state.user
+            }
+            df = pd.concat([df, pd.DataFrame([new_task])], ignore_index=True)
+            df.to_excel(TASK_FILE, index=False)
+            st.success("Task Created")
             st.rerun()
 
-    # ---------------- KANBAN BOARD ----------------
-    st.header("📌 Kanban Board")
+    # ---------------- FILTER VIEW ----------------
+    if st.session_state.role == "admin":
+        df_view = df.copy()
+    else:
+        df_view = df[
+            (df["Assigned_To"] == st.session_state.user) |
+            (df["Assigned_To"] == "everyone@task.com")
+        ]
 
-    cols = st.columns(4)
-    statuses = ["In Progress","Task Completed","Partially Completed","Need Assistance"]
+    # ---------------- KPIs ----------------
+    st.subheader("📊 Task Summary")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total", len(df_view))
+    c2.metric("In Progress", (df_view["Status"] == "In Progress").sum())
+    c3.metric("Completed", (df_view["Status"] == "Completed").sum())
+    c4.metric("Need Assistance", (df_view["Status"] == "Need Assistance").sum())
 
-    for col, status in zip(cols, statuses):
-        with col:
-            st.subheader(status)
-            for _, r in df_view[df_view["Status"]==status].iterrows():
-                st.markdown(f"""
-                **{r['Task_Name']}**  
-                Assigned: {r['Assigned_To']}  
-                Due: {r['Due_Date'].date() if pd.notna(r['Due_Date']) else "-"}  
-                ⏳ Aging: {r['Aging_Days']} days  
-                🔔 Reminder: {r['Reminder']}
-                """)
+    # ---------------- TASK TABLE ----------------
+    st.subheader("📋 Task Details")
 
-                if st.session_state.role == "admin":
-                    if st.button("🔔 Reminder", key=f"rem_{r['Task_ID']}"):
-                        df.loc[df["Task_ID"]==r["Task_ID"],"Reminder"]="Yes"
-                        df.to_excel(TASK_FILE, index=False)
-                        st.rerun()
+    for i, row in df_view.iterrows():
+        with st.expander(f"{row['Task_Name']} | Due: {row['Due_Date']}"):
+            st.write("**Assigned To:**", row["Assigned_To"])
+            st.write("**Priority:**", row["Priority"])
+            st.write("**Remarks:**", row["Task_Remarks"])
 
-    # ---------------- PERFORMANCE RANKING ----------------
-    st.header("🏆 User Performance Ranking")
+            new_status = st.selectbox(
+                "Update Status",
+                STATUS_LIST,
+                index=STATUS_LIST.index(row["Status"]),
+                key=f"status_{i}"
+            )
 
-    rank = df[df["Status"]=="Task Completed"].groupby("Assigned_To").size().reset_index(name="Completed")
-    st.plotly_chart(px.bar(rank, x="Assigned_To", y="Completed"), use_container_width=True)
+            completion_remark = st.text_input(
+                "Completion Remarks",
+                value=row["Completion_Remarks"],
+                key=f"remark_{i}"
+            )
+
+            if st.button("Update", key=f"update_{i}"):
+                df.loc[i, "Status"] = new_status
+                df.loc[i, "Completion_Remarks"] = completion_remark
+                df.to_excel(TASK_FILE, index=False)
+                st.success("Updated")
+                st.rerun()
+
+            # Admin Reassign
+            if st.session_state.role == "admin":
+                new_user = st.text_input(
+                    "Reassign Task",
+                    value=row["Assigned_To"],
+                    key=f"reassign_{i}"
+                )
+                if st.button("Reassign", key=f"rebtn_{i}"):
+                    df.loc[i, "Assigned_To"] = new_user
+                    df.to_excel(TASK_FILE, index=False)
+                    st.success("Reassigned")
+                    st.rerun()
+
+    # ---------------- AGING ----------------
+    st.subheader("⏳ Task Aging")
+    df_view["Aging_Days"] = df_view["Due_Date"].apply(
+        lambda x: (date.today() - x).days if pd.notna(x) else 0
+    )
+    st.dataframe(df_view[["Task_Name", "Assigned_To", "Aging_Days"]])
+
+    # ---------------- USER PERFORMANCE ----------------
+    st.subheader("📊 User-wise Performance")
+    perf = df.groupby(["Assigned_To", "Status"]).size().reset_index(name="Count")
+    fig = px.bar(perf, x="Assigned_To", y="Count", color="Status")
+    st.plotly_chart(fig, use_container_width=True)
 
     # ---------------- EXPORT ----------------
-    if st.session_state.role == "admin":
-        st.download_button(
-            "📥 Export to Excel",
-            df_view.to_excel(index=False),
-            "task_export.xlsx"
-        )
+    st.subheader("📥 Export")
+    output = BytesIO()
+    df_view.to_excel(output, index=False, engine="openpyxl")
+    output.seek(0)
+
+    st.download_button(
+        "Download Excel",
+        data=output,
+        file_name="tasks_export.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
     # ---------------- LOGOUT ----------------
     if st.button("Logout"):
