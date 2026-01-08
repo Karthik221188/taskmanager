@@ -14,7 +14,7 @@ st.set_page_config(
 # ---------------- BRANDING ----------------
 if os.path.exists("meesho_logo.png"):
     st.image("meesho_logo.png", width=160)
-st.title("📌 South Task Tower")
+st.title("📌 South Area Manager Task Management Tower")
 
 # ---------------- FILES ----------------
 USERS_FILE = "users.xlsx"
@@ -250,3 +250,4 @@ with st.expander("🔑 Change Password"):
 if st.button("Logout"):
     st.session_state.clear()
     st.rerun()
+
