@@ -7,26 +7,29 @@ import plotly.express as px
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(
-    page_title="South Task Tower",
+    page_title="South Area Manager Task Management Tower",
     layout="wide"
 )
 
 # ---------------- BRANDING ----------------
-if os.path.exists("meesho_logo.png"):
-    st.image("meesho_logo.png", width=160)
+if os.path.exists("meesho.png"):
+    st.image("meesho.png", width=160)
 st.title("📌 South Area Manager Task Management Tower")
 
 # ---------------- FILES ----------------
 USERS_FILE = "users.xlsx"
 TASK_FILE = "tasks.xlsx"
+ATTACH_DIR = "attachments"
 DEFAULT_PASSWORD = "Task@2026"
 
 STATUS_LIST = [
     "In Progress",
     "Completed",
     "Partially Completed",
-    "Need Assistance"
+    "Need support"
 ]
+
+os.makedirs(ATTACH_DIR, exist_ok=True)
 
 # ---------------- LOAD USERS ----------------
 users = pd.read_excel(USERS_FILE)
@@ -93,8 +96,11 @@ safe_columns = {
     "Email_Subject": "",
     "Task_Given": "",
     "Completion_Remarks": "",
-    "Reminder": "No"
+    "Reminder": "No",
+    "Attachment_Name": "",
+    "Attachment_Upload_Date": pd.NaT
 }
+
 for col, default in safe_columns.items():
     if col not in df.columns:
         df[col] = default
@@ -102,10 +108,22 @@ for col, default in safe_columns.items():
 # ---------------- DATE NORMALIZATION ----------------
 df["Task_Given_Date"] = pd.to_datetime(df["Task_Given_Date"], errors="coerce").dt.date
 df["Due_Date"] = pd.to_datetime(df["Due_Date"], errors="coerce").dt.date
+df["Attachment_Upload_Date"] = pd.to_datetime(
+    df["Attachment_Upload_Date"], errors="coerce"
+).dt.date
 
 # ---------------- 90 DAY FILTER ----------------
 cutoff_date = date.today() - timedelta(days=90)
 df = df[df["Task_Given_Date"] >= cutoff_date]
+
+# ---------------- DELETE EXPIRED ATTACHMENTS (10 DAYS) ----------------
+for i, r in df.iterrows():
+    if pd.notna(r["Attachment_Upload_Date"]):
+        if (date.today() - r["Attachment_Upload_Date"]).days > 10:
+            path = os.path.join(ATTACH_DIR, r["Attachment_Name"])
+            if os.path.exists(path):
+                os.remove(path)
+            df.loc[i, ["Attachment_Name", "Attachment_Upload_Date"]] = ["", pd.NaT]
 
 # ---------------- CREATE TASK ----------------
 with st.expander("➕ Create New Task"):
@@ -123,7 +141,25 @@ with st.expander("➕ Create New Task"):
         ["everyone@task.com"] + users["email"].tolist()
     )
 
+    uploaded_file = st.file_uploader(
+        "📎 Upload Attachment (PDF / XLSX | Max 10MB)",
+        type=["pdf", "xlsx"]
+    )
+
     if st.button("Create Task"):
+        attach_name = ""
+        attach_date = pd.NaT
+
+        if uploaded_file:
+            if uploaded_file.size > 10 * 1024 * 1024:
+                st.error("File size exceeds 10MB")
+                st.stop()
+
+            attach_name = f"{int(datetime.now().timestamp())}_{uploaded_file.name}"
+            with open(os.path.join(ATTACH_DIR, attach_name), "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            attach_date = date.today()
+
         new = {
             "Task_ID": len(df) + 1,
             "Task_Given_Date": date.today(),
@@ -137,8 +173,11 @@ with st.expander("➕ Create New Task"):
             "Status": "In Progress",
             "Completion_Remarks": "",
             "Created_By": st.session_state.email,
-            "Reminder": "No"
+            "Reminder": "No",
+            "Attachment_Name": attach_name,
+            "Attachment_Upload_Date": attach_date
         }
+
         df = pd.concat([df, pd.DataFrame([new])], ignore_index=True)
         df.to_excel(TASK_FILE, index=False)
         st.success("Task Created")
@@ -188,6 +227,27 @@ for i, row in df_view.iterrows():
         st.write("📝 Task Given:", row["Task_Given"])
         st.write("⚡ Priority:", row["Priority"])
 
+        # -------- Attachment Section --------
+        if row.get("Attachment_Name"):
+            if (
+                pd.notna(row.get("Attachment_Upload_Date"))
+                and (date.today() - row["Attachment_Upload_Date"]).days <= 10
+            ):
+                file_path = os.path.join(ATTACH_DIR, row["Attachment_Name"])
+                if os.path.exists(file_path):
+                    with open(file_path, "rb") as f:
+                        st.download_button(
+                            "📎 Download Attachment",
+                            f,
+                            file_name=row["Attachment_Name"],
+                            key=f"dl_{i}"
+                        )
+                else:
+                    st.warning("📎 Attachment file missing")
+            else:
+                st.warning("📎 Attachment expired (10 days limit)")
+
+        # -------- USER UPDATE SECTION --------
         if st.session_state.role != "admin":
             status = st.selectbox(
                 "Update Status",
@@ -200,12 +260,15 @@ for i, row in df_view.iterrows():
                 value=row["Completion_Remarks"],
                 key=f"r_{i}"
             )
+
             if st.button("Update Task", key=f"u_{i}"):
                 df.loc[i, "Status"] = status
                 df.loc[i, "Completion_Remarks"] = remark
                 df.to_excel(TASK_FILE, index=False)
+                st.success("Task Updated")
                 st.rerun()
 
+        # -------- ADMIN REMINDER --------
         if st.session_state.role == "admin":
             if st.button("🔔 Send Reminder", key=f"rem_{i}"):
                 df.loc[i, "Reminder"] = "Yes"
@@ -250,4 +313,5 @@ with st.expander("🔑 Change Password"):
 if st.button("Logout"):
     st.session_state.clear()
     st.rerun()
+
 
